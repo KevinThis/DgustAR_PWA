@@ -60,6 +60,32 @@
     }
   </style>
   <script>
+    // Las rutas del portal requieren sesión del personal. Sin token se
+    // regresa a /admin, donde se solicita el PIN.
+    (() => {
+      const protegida = (path) => path.startsWith('/admin/');
+      const haySesion = () => {
+        try { return Boolean(localStorage.getItem('bistro_admin_token')); }
+        catch { return false; }
+      };
+      const revisar = () => {
+        if (protegida(window.location.pathname) && !haySesion()) {
+          window.location.replace('/admin');
+        }
+      };
+      ['pushState', 'replaceState'].forEach((metodo) => {
+        const original = history[metodo];
+        history[metodo] = function (...args) {
+          const resultado = original.apply(this, args);
+          revisar();
+          return resultado;
+        };
+      });
+      window.addEventListener('popstate', revisar);
+      revisar();
+    })();
+  </script>
+  <script>
     // Una entrada nueva al menú debe comenzar con el QR de la mesa.
     // La mesa se conserva mientras el usuario navega dentro de la PWA,
     // pero no se reutiliza automáticamente al abrir una nueva entrada.
@@ -597,7 +623,7 @@
     </div>
   </div>
   <!-- Consultas del Gestor de Menú: filtro y búsqueda por Id contra la API -->
-  <script src="/assets/admin-consultas.js?v=1" defer></script>
+  <script src="/assets/admin-consultas.js?v=2" defer></script>
 </body>
 
 </html>

@@ -17,9 +17,9 @@
 
   function token() {
     try {
-      return localStorage.getItem('bistro_admin_token') || 'bistro-admin-authorized';
+      return localStorage.getItem('bistro_admin_token') || '';
     } catch (e) {
-      return 'bistro-admin-authorized';
+      return '';
     }
   }
 
