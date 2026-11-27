@@ -17,9 +17,9 @@
 
   function token() {
     try {
-      return localStorage.getItem('bistro_admin_token') || 'bistro-admin-authorized';
+      return localStorage.getItem('bistro_admin_token') || '';
     } catch (e) {
-      return 'bistro-admin-authorized';
+      return '';
     }
   }
 
@@ -36,6 +36,9 @@
 
   function apiGet(url) {
     return fetch(url, { headers: { 'x-admin-token': token() }, cache: 'no-store' })
+      .catch(function () {
+        throw new Error('No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.');
+      })
       .then(function (res) {
         return res.json().catch(function () { return null; }).then(function (data) {
           if (!res.ok) {
@@ -121,7 +124,7 @@
     panel.querySelector('form[data-rol="porId"]').addEventListener('submit', function (e) {
       e.preventDefault();
       var id = panel.querySelector('input[name="id"]').value.trim();
-      if (!id) { setEstado('Escribe el Id del platillo.', true); return; }
+      if (!id) { setEstado('Escribe el Id del platillo.', true); pintar(''); return; }
       consultarPorId(id);
     });
     panel.querySelector('[data-rol="resultado"]').addEventListener('click', function (e) {
@@ -173,7 +176,24 @@
     if (el) el.innerHTML = html;
   }
 
+  // Bloquea los botones del panel mientras hay una consulta en curso.
+  function ocupado(activo) {
+    var botones = document.querySelectorAll('#' + PANEL_ID + ' button');
+    for (var i = 0; i < botones.length; i++) {
+      botones[i].disabled = activo;
+      botones[i].style.opacity = activo ? '0.55' : '';
+      botones[i].style.cursor = activo ? 'wait' : 'pointer';
+    }
+  }
+
   function consultarConFiltro(filtro) {
+    var min = filtro.precioMin === '' ? null : Number(filtro.precioMin);
+    var max = filtro.precioMax === '' ? null : Number(filtro.precioMax);
+    if (min !== null && max !== null && min > max) {
+      setEstado('El precio mínimo no puede ser mayor que el precio máximo.', true);
+      pintar('');
+      return Promise.resolve();
+    }
     var params = new URLSearchParams();
     Object.keys(filtro).forEach(function (k) {
       if (filtro[k] !== '' && filtro[k] != null) params.append(k, filtro[k]);
@@ -181,6 +201,7 @@
     var url = '/api/admin/products' + (params.toString() ? '?' + params.toString() : '');
     ultimaConsulta = { tipo: 'filtro', valor: filtro };
     setEstado('Consultando ' + url + ' …');
+    ocupado(true);
 
     return apiGet(url).then(function (lista) {
       lista = lista || [];
@@ -209,6 +230,8 @@
     }).catch(function (err) {
       setEstado('No se pudo consultar: ' + err.message, true);
       pintar('');
+    }).then(function () {
+      ocupado(false);
     });
   }
 
@@ -216,6 +239,7 @@
     var url = '/api/admin/products/' + encodeURIComponent(id);
     ultimaConsulta = { tipo: 'id', valor: id };
     setEstado('Consultando ' + url + ' …');
+    ocupado(true);
 
     return apiGet(url).then(function (p) {
       setEstado('GET ' + url + '  →  encontrado');
@@ -235,6 +259,8 @@
     }).catch(function (err) {
       setEstado('GET ' + url + '  →  ' + err.message, true);
       pintar('');
+    }).then(function () {
+      ocupado(false);
     });
   }
 
