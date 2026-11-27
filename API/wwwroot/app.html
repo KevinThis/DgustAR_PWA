@@ -60,6 +60,174 @@
     }
   </style>
   <script>
+    // Las rutas del portal requieren sesión del personal. Sin token se
+    // regresa a /admin, donde se solicita el PIN.
+    (() => {
+      const protegida = (path) => path.startsWith('/admin/');
+      const haySesion = () => {
+        try { return Boolean(localStorage.getItem('bistro_admin_token')); }
+        catch { return false; }
+      };
+      const revisar = () => {
+        if (protegida(window.location.pathname) && !haySesion()) {
+          window.location.replace('/admin');
+        }
+      };
+      ['pushState', 'replaceState'].forEach((metodo) => {
+        const original = history[metodo];
+        history[metodo] = function (...args) {
+          const resultado = original.apply(this, args);
+          revisar();
+          return resultado;
+        };
+      });
+      window.addEventListener('popstate', revisar);
+      revisar();
+    })();
+  </script>
+  <script>
+    // Aviso de conexión del portal: aparece cuando la API no responde o
+    // devuelve un error del servidor al cargar datos, y se quita solo en
+    // cuanto una petición vuelve a responder bien.
+    (() => {
+      const enPortal = () => window.location.pathname.startsWith('/admin');
+      let aviso = null;
+
+      const mostrar = (texto) => {
+        if (!document.body) return;
+        if (!aviso) {
+          aviso = document.createElement('div');
+          aviso.setAttribute('role', 'status');
+          aviso.setAttribute('aria-live', 'polite');
+          aviso.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);' +
+            'z-index:9999;max-width:calc(100% - 24px);display:flex;align-items:center;gap:10px;' +
+            'padding:10px 14px;border-radius:14px;background:#450a0a;color:#fecaca;' +
+            'border:1px solid #b91c1c;box-shadow:0 10px 30px rgba(0,0,0,.45);' +
+            'font:600 13px/1.35 "Plus Jakarta Sans",system-ui,sans-serif;';
+          const icono = document.createElement('span');
+          icono.className = 'material-symbols-outlined';
+          icono.style.fontSize = '20px';
+          icono.textContent = 'cloud_off';
+          const mensaje = document.createElement('span');
+          mensaje.dataset.mensaje = '';
+          const reintentar = document.createElement('button');
+          reintentar.type = 'button';
+          reintentar.textContent = 'Reintentar';
+          reintentar.style.cssText = 'margin-left:4px;padding:6px 10px;border-radius:10px;border:0;' +
+            'background:#b91c1c;color:#fff;font-weight:800;font-size:12px;cursor:pointer;flex-shrink:0;';
+          reintentar.addEventListener('click', () => window.location.reload());
+          aviso.append(icono, mensaje, reintentar);
+          document.body.appendChild(aviso);
+        }
+        aviso.querySelector('[data-mensaje]').textContent = texto;
+        aviso.style.display = 'flex';
+      };
+
+      const ocultar = () => {
+        if (aviso) aviso.style.display = 'none';
+      };
+
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const request = args[0];
+        const url = typeof request === 'string' ? request : request?.url || '';
+        const method = String(args[1]?.method || request?.method || 'GET').toUpperCase();
+        const vigilar = enPortal() && url.includes('/api/');
+        try {
+          const response = await nativeFetch(...args);
+          if (vigilar) {
+            if (response.status >= 500 && method === 'GET') {
+              mostrar('El servidor no pudo cargar la información (error ' + response.status + '). Intenta de nuevo en unos momentos.');
+            } else if (response.status < 500) {
+              ocultar();
+            }
+          }
+          return response;
+        } catch (error) {
+          if (vigilar) {
+            mostrar('Sin conexión con el servidor. Revisa tu conexión a internet; los datos se actualizarán al reconectar.');
+          }
+          throw error;
+        }
+      };
+
+      window.addEventListener('offline', () => {
+        if (enPortal()) mostrar('Sin conexión a internet. Los cambios no se guardarán hasta reconectar.');
+      });
+      window.addEventListener('online', ocultar);
+    })();
+  </script>
+  <script>
+    // Atajo oculto del personal: cinco toques al logo del menú abren el portal.
+    // El PIN se pide y se valida en /admin contra la API, no en el navegador.
+    (() => {
+      let toques = 0;
+      let reinicio = null;
+      document.addEventListener('click', (event) => {
+        const logo = event.target.closest?.('header [title="DGustAR"]');
+        if (!logo || window.location.pathname.startsWith('/admin')) return;
+        event.stopImmediatePropagation();
+        toques += 1;
+        clearTimeout(reinicio);
+        reinicio = setTimeout(() => { toques = 0; }, 3000);
+        if (toques >= 5) {
+          toques = 0;
+          window.location.assign('/admin');
+        }
+      }, true);
+    })();
+  </script>
+  <script>
+    // Reasignación manual de mesa por el personal: el PIN se valida con la API
+    // (POST /api/admin/login) antes de habilitar la lista de mesas. Solo se
+    // valida; no se guarda ninguna sesión en el dispositivo del comensal.
+    (() => {
+      let permitirSiguiente = false;
+      document.addEventListener('click', async (event) => {
+        const boton = event.target.closest?.('button');
+        if (!boton || !/Reasignar con PIN/i.test(boton.textContent || '')) return;
+        if (permitirSiguiente) {
+          permitirSiguiente = false;
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        const pin = (window.prompt('Acceso de Meseros y Personal:\nIngresa tu PIN para reasignar la mesa:') || '').trim();
+        if (!pin) return;
+
+        boton.disabled = true;
+        try {
+          const respuesta = await fetch('/api/admin/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin })
+          });
+          const datos = await respuesta.json().catch(() => ({}));
+          if (!respuesta.ok || !datos.success) {
+            window.alert(datos.error || 'PIN incorrecto. Reasignación manual no autorizada.');
+            return;
+          }
+          // PIN válido: se abre la lista de mesas del propio menú.
+          const promptOriginal = window.prompt;
+          window.prompt = () => '1234';
+          permitirSiguiente = true;
+          try {
+            boton.disabled = false;
+            boton.click();
+          } finally {
+            window.prompt = promptOriginal;
+            permitirSiguiente = false;
+          }
+        } catch {
+          window.alert('No se pudo validar el PIN. Revisa tu conexión e intenta de nuevo.');
+        } finally {
+          boton.disabled = false;
+        }
+      }, true);
+    })();
+  </script>
+  <script>
     // Una entrada nueva al menú debe comenzar con el QR de la mesa.
     // La mesa se conserva mientras el usuario navega dentro de la PWA,
     // pero no se reutiliza automáticamente al abrir una nueva entrada.
@@ -367,7 +535,7 @@
   </script>
   
   <!-- DGustAR Golden Ratio Design System & Admin Suite -->
-  <link rel="stylesheet" href="/assets/admin-golden.css?v=6">
+  <link rel="stylesheet" href="/assets/admin-golden.css?v=7">
   <script src="/assets/admin-golden.js?v=4" defer></script>
 
   <!-- Ajustes de flujo para el bundle distribuido sin fuente de Vue en este repositorio. -->
@@ -597,7 +765,7 @@
     </div>
   </div>
   <!-- Consultas del Gestor de Menú: filtro y búsqueda por Id contra la API -->
-  <script src="/assets/admin-consultas.js?v=1" defer></script>
+  <script src="/assets/admin-consultas.js?v=2" defer></script>
 </body>
 
 </html>
